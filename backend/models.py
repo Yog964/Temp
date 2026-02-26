@@ -31,6 +31,7 @@ class Complaint(Base):
     severity_score = Column(Float, nullable=True)
     confidence_score = Column(Float, nullable=True)
     department_suggested = Column(String, nullable=True)
+    votes = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     reporter_id = Column(Integer, ForeignKey("users.id"))
 

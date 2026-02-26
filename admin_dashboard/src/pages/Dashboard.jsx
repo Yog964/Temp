@@ -118,11 +118,19 @@ export default function Dashboard() {
                 <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                     <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'white', marginBottom: '1.5rem' }}>Department Ranking</h3>
                     <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', paddingRight: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        <DepartmentRow name="Water Supply" total="3,124" open="120" resolved="3,004" progress="96" />
-                        <DepartmentRow name="Sanitation" total="4,500" open="450" resolved="4,050" progress="85" />
-                        <DepartmentRow name="Electricity" total="2,100" open="300" resolved="1,800" progress="72" />
-                        <DepartmentRow name="Roads & Bridges" total="1,800" open="600" resolved="1,200" progress="60" />
-                        <DepartmentRow name="Waste Mgmt" total="876" open="50" resolved="826" progress="94" />
+                        {stats.deptStats?.map(dept => (
+                            <DepartmentRow
+                                key={dept.name}
+                                name={dept.name}
+                                total={dept.total}
+                                open={dept.open}
+                                resolved={dept.resolved}
+                                progress={dept.progress}
+                            />
+                        ))}
+                        {(!stats.deptStats || stats.deptStats.length === 0) && (
+                            <p className="subtitle">No data available</p>
+                        )}
                     </div>
                 </div>
             </div>

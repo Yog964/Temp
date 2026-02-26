@@ -50,6 +50,7 @@ class ComplaintAIResponse(ComplaintBase):
     severity_score: Optional[float] = None
     confidence_score: Optional[float] = None
     department_suggested: Optional[str] = None
+    votes: int = 0
 
     class Config:
         from_attributes = True

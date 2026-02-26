@@ -170,3 +170,15 @@ def get_all_workers(db: Session = Depends(get_db)):
         db.commit()
         workers = db.query(models.Worker).all()
     return workers
+@app.patch("/complaints/{complaint_id}/status")
+def update_complaint_status(complaint_id: int, status_update: dict, db: Session = Depends(get_db)):
+    comp = db.query(models.Complaint).filter(models.Complaint.id == complaint_id).first()
+    if not comp:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+    
+    new_status = status_update.get("status")
+    if new_status:
+        comp.status = new_status
+        db.commit()
+        db.refresh(comp)
+    return comp

@@ -7,6 +7,7 @@ def migrate():
         try:
             conn.execute(text("ALTER TABLE complaints ADD COLUMN IF NOT EXISTS department VARCHAR;"))
             conn.execute(text("ALTER TABLE complaints ADD COLUMN IF NOT EXISTS voice_url VARCHAR;"))
+            conn.execute(text("ALTER TABLE complaints ADD COLUMN IF NOT EXISTS votes INTEGER DEFAULT 0;"))
             conn.commit()
             print("Migration successful!")
         except Exception as e:

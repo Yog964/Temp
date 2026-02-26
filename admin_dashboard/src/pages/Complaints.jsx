@@ -1,24 +1,37 @@
 import React, { useState, useEffect } from 'react';
-import { Filter, AlertTriangle, MessageCircle, MapPin, Search, ChevronDown } from 'lucide-react';
-import { fetchComplaints } from '../api';
+import { Filter, Search, ChevronDown, X, MapPin, Calendar, User, Info, FileText, Play, ThumbsUp } from 'lucide-react';
+import { fetchComplaints, updateComplaintStatus } from '../api';
+
+const BASE_URL = 'http://localhost:8000';
 
 export default function Complaints() {
     const [activeTab, setActiveTab] = useState('all');
     const [complaints, setComplaints] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [selectedComplaint, setSelectedComplaint] = useState(null);
+
+    const load = async () => {
+        setLoading(true);
+        const data = await fetchComplaints();
+        setComplaints(data);
+        setLoading(false);
+    };
 
     useEffect(() => {
-        const load = async () => {
-            const data = await fetchComplaints();
-            setComplaints(data);
-            setLoading(false);
-        };
         load();
     }, []);
 
+    const handleUpdateStatus = async (id, status) => {
+        const updated = await updateComplaintStatus(id, status);
+        if (updated) {
+            setSelectedComplaint(null);
+            load();
+        }
+    };
+
     const filteredComplaints = complaints.filter(c => {
         if (activeTab === 'all') return true;
-        if (activeTab === 'high-priority') return c.severity_score >= 8;
+        if (activeTab === 'high-priority') return (c.severity_score || 0) >= 8;
         if (activeTab === 'pending') return c.status === 'Pending';
         if (activeTab === 'resolved') return c.status === 'Resolved';
         return true;
@@ -44,99 +57,207 @@ export default function Complaints() {
                 </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
+            <div style={{ display: 'flex', gap: '1rem' }}>
                 <div className="search-bar" style={{ flex: 1, width: 'auto' }}>
                     <Search className="search-icon" />
                     <input
                         type="text"
-                        placeholder="Search by ID, category, or location"
+                        placeholder="Search by ID, category, or location..."
                         className="search-input"
                     />
                 </div>
                 <button className="btn-secondary">
                     <Filter size={20} />
                     <span>Filters</span>
-                    <ChevronDown size={16} style={{ marginLeft: '0.5rem' }} />
+                    <ChevronDown size={16} />
                 </button>
             </div>
 
             {loading ? (
-                <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>Loading complaints...</div>
+                <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center' }}>Loading complaints...</div>
             ) : (
-                <div className="grid grid-cols-12" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '1.5rem' }}>
-                    {filteredComplaints.map(complaint => (
-                        <div key={complaint.id} className="glass-card complaint-card">
-                            <div className="complaint-img-container">
-                                <img
-                                    src={`http://localhost:8000/${complaint.image_url}`}
-                                    alt={complaint.issue_type}
-                                    className="complaint-img"
-                                    onError={(e) => {
-                                        e.target.src = 'https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&q=80&w=400';
-                                    }}
-                                />
-                                <div className="complaint-badge">
-                                    AI Match: {Math.round(complaint.confidence_score)}%
-                                </div>
-                            </div>
-
-                            <div className="complaint-content">
-                                <div className="complaint-header">
-                                    <div>
-                                        <span className="complaint-id">COMP-{complaint.id}</span>
-                                        <h3 className="complaint-title">{complaint.issue_type || 'Unknown Issue'}</h3>
-                                    </div>
-                                    <div className={`complaint-priority priority-${complaint.severity_score >= 8 ? 'Critical' : 'High'}`}>
-                                        {complaint.severity_score >= 8 ? 'Critical' : 'High'}
-                                    </div>
-                                </div>
-
-                                <div className="complaint-details">
-                                    <p className="complaint-detail-item">
-                                        <MapPin size={16} /> Lat: {complaint.latitude}, Lng: {complaint.longitude}
-                                    </p>
-                                    <p className="complaint-detail-item" style={{ fontWeight: 'bold', color: 'var(--primary-400)' }}>
-                                        Dept: {complaint.department}
-                                    </p>
-                                    {complaint.description && (
-                                        <p className="complaint-detail-item" style={{ fontSize: '0.8rem', color: 'var(--gray-400)' }}>
-                                            "{complaint.description}"
-                                        </p>
-                                    )}
-                                    {complaint.voice_url && (
-                                        <div className="complaint-detail-item" style={{ marginTop: '0.5rem' }}>
-                                            <audio controls style={{ height: '30px', width: '100%' }}>
-                                                <source src={`http://localhost:8000/${complaint.voice_url}`} type="audio/mpeg" />
-                                            </audio>
+                <div className="glass-panel complaints-table-container">
+                    <table className="complaints-table">
+                        <thead>
+                            <tr>
+                                <th>Photo</th>
+                                <th>Issue Type</th>
+                                <th>Department</th>
+                                <th>Location</th>
+                                <th>Priority</th>
+                                <th>Status</th>
+                                <th>Votes</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filteredComplaints.map(complaint => (
+                                <tr
+                                    key={complaint.id}
+                                    className="complaint-row"
+                                    onClick={() => setSelectedComplaint(complaint)}
+                                >
+                                    <td>
+                                        <img
+                                            src={`${BASE_URL}/${complaint.image_url}`}
+                                            className="complaint-thumb"
+                                            onError={(e) => e.target.src = 'https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&q=80&w=400'}
+                                        />
+                                    </td>
+                                    <td>
+                                        <div style={{ fontWeight: '600' }}>{complaint.issue_type || complaint.title || 'Unknown'}</div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--gray-500)' }}>ID: COMP-{complaint.id}</div>
+                                    </td>
+                                    <td>
+                                        <span className="complaint-id" style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', color: 'var(--blue-400)' }}>
+                                            {complaint.department}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div style={{ fontSize: '0.85rem' }}>{complaint.latitude?.toFixed(4)}, {complaint.longitude?.toFixed(4)}</div>
+                                    </td>
+                                    <td>
+                                        <div className={`complaint-priority priority-${(complaint.severity_score || 0) >= 8 ? 'Critical' : 'High'}`}>
+                                            {(complaint.severity_score || 0) >= 8 ? 'Critical' : 'High'}
                                         </div>
-                                    )}
-                                </div>
-
-                                <div className="complaint-footer">
-                                    <div className="complaint-meta">
-                                        <p style={{ marginBottom: '0.25rem' }}>Status: {complaint.status}</p>
-                                        <p>{new Date(complaint.created_at).toLocaleDateString()}</p>
-                                    </div>
-                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                        <button className="btn-outline">
-                                            Reject
-                                        </button>
-                                        <button className="btn-small-primary">
-                                            Assign Worker
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    ))}
+                                    </td>
+                                    <td>
+                                        <span style={{ fontSize: '0.85rem', fontWeight: '500' }}>{complaint.status}</span>
+                                    </td>
+                                    <td>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--primary-400)' }}>
+                                            <ThumbsUp size={14} />
+                                            <span>{complaint.votes || 0}</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div style={{ fontSize: '0.85rem' }}>{new Date(complaint.created_at).toLocaleDateString()}</div>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
                     {filteredComplaints.length === 0 && (
-                        <div className="glass-panel" style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center' }}>
+                        <div style={{ padding: '3rem', textAlign: 'center' }}>
                             <h3 style={{ color: 'white' }}>No complaints found</h3>
-                            <p className="subtitle">Reported issues will appear here after users upload them.</p>
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* DETAILS MODAL */}
+            {selectedComplaint && (
+                <div className="modal-overlay" onClick={() => setSelectedComplaint(null)}>
+                    <div className="modal-content" onClick={e => e.stopPropagation()}>
+                        <X className="modal-close" onClick={() => setSelectedComplaint(null)} />
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 1fr) 1.5fr', height: '100%' }}>
+                            <div style={{ padding: '2rem', borderRight: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                                <img
+                                    src={`${BASE_URL}/${selectedComplaint.image_url}`}
+                                    style={{ width: '100%', borderRadius: '1rem', objectFit: 'cover', marginBottom: '1.5rem', boxShadow: '0 10px 20px rgba(0,0,0,0.3)' }}
+                                    onError={(e) => e.target.src = 'https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&q=80&w=400'}
+                                />
+                                {selectedComplaint.voice_url && (
+                                    <div className="glass-panel" style={{ padding: '1rem', marginBottom: '1.5rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', color: 'var(--primary-400)' }}>
+                                            <Play size={16} fill="currentColor" />
+                                            <span style={{ fontWeight: '600' }}>Voice Recording</span>
+                                        </div>
+                                        <audio controls style={{ width: '100%', height: '35px' }}>
+                                            <source src={`${BASE_URL}/${selectedComplaint.voice_url}`} type="audio/mpeg" />
+                                        </audio>
+                                    </div>
+                                )}
+                                <div className="btn-action-required" onClick={() => alert('User notification sent: Action required for this issue')}>
+                                    Notification User Action
+                                </div>
+                            </div>
+
+                            <div style={{ padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                <div>
+                                    <h2 className="title" style={{ fontSize: '1.5rem', color: 'white', marginBottom: '0.5rem' }}>
+                                        {selectedComplaint.issue_type || selectedComplaint.title}
+                                    </h2>
+                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                        <span className="complaint-id">COMP-{selectedComplaint.id}</span>
+                                        <span className="complaint-id" style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', color: 'var(--blue-400)' }}>
+                                            {selectedComplaint.department}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                        <div style={{ padding: '0.75rem', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem' }}>
+                                            <MapPin size={20} color="var(--primary-400)" />
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--gray-500)' }}>Location</div>
+                                            <div style={{ color: 'white' }}>{selectedComplaint.latitude}, {selectedComplaint.longitude}</div>
+                                        </div>
+                                    </div>
+
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                        <div style={{ padding: '0.75rem', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem' }}>
+                                            <Calendar size={20} color="var(--primary-400)" />
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--gray-500)' }}>Reported On</div>
+                                            <div style={{ color: 'white' }}>{new Date(selectedComplaint.created_at).toLocaleString()}</div>
+                                        </div>
+                                    </div>
+
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                        <div style={{ padding: '0.75rem', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '0.75rem' }}>
+                                            <ThumbsUp size={20} color="var(--primary-400)" />
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--gray-500)' }}>Upvotes</div>
+                                            <div style={{ color: 'white', fontWeight: 'bold' }}>{selectedComplaint.votes || 0} citizens voted</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="glass-panel" style={{ padding: '1.5rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', color: 'var(--primary-400)' }}>
+                                        <FileText size={18} />
+                                        <span style={{ fontWeight: '600' }}>Description</span>
+                                    </div>
+                                    <p style={{ color: 'var(--gray-300)', lineHeight: '1.6', fontSize: '0.95rem' }}>
+                                        {selectedComplaint.description || "No description provided by user."}
+                                    </p>
+                                </div>
+
+                                <div style={{ marginTop: 'auto', display: 'flex', gap: '1rem' }}>
+                                    <button
+                                        className="btn-secondary"
+                                        style={{ flex: 1 }}
+                                        onClick={() => handleUpdateStatus(selectedComplaint.id, 'Rejected')}
+                                    >
+                                        Reject Issue
+                                    </button>
+                                    <button
+                                        className="btn-primary"
+                                        style={{ flex: 1 }}
+                                        onClick={() => handleUpdateStatus(selectedComplaint.id, 'In Progress')}
+                                    >
+                                        Assign To Worker
+                                    </button>
+                                    <button
+                                        className="btn-primary"
+                                        style={{ flex: 1, backgroundColor: 'var(--green-600)' }}
+                                        onClick={() => handleUpdateStatus(selectedComplaint.id, 'Resolved')}
+                                    >
+                                        Mark Resolved
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
     );
 }
+

@@ -78,8 +78,11 @@ class _LoginPageState extends State<LoginPage> {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+        final token = data['access_token'];
+        print("DEBUG: Login successful. Token: ${token.substring(0, 10)}...");
+        
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('access_token', data['access_token']);
+        await prefs.setString('access_token', token);
         
         if (mounted) {
           Navigator.pushReplacement(
@@ -329,18 +332,44 @@ class _HomeViewState extends State<HomeView> {
       final token = prefs.getString('access_token');
       
       final userRes = await http.get(Uri.parse('$baseUrl/users/me'), headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 10));
+      if (userRes.statusCode == 401) {
+        _handleUnauthorized();
+        return;
+      }
+      
       if (userRes.statusCode == 200) {
         setState(() => _userName = json.decode(userRes.body)['name']);
       }
 
       final complaintRes = await http.get(Uri.parse('$baseUrl/complaints/me'), headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 10));
+      if (complaintRes.statusCode == 401) {
+        _handleUnauthorized();
+        return;
+      }
+      
       if (complaintRes.statusCode == 200) {
-        setState(() => _myComplaints = json.decode(complaintRes.body));
+        setState(() {
+          _myComplaints = json.decode(complaintRes.body);
+          _myComplaints.sort((a, b) => DateTime.parse(b['created_at']).compareTo(DateTime.parse(a['created_at'])));
+        });
       }
     } catch (e) {
       print('Error fetching home data: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _handleUnauthorized() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('access_token');
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginPage()),
+        (route) => false,
+      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session expired. Please login again.')));
     }
   }
 
@@ -380,15 +409,20 @@ class _HomeViewState extends State<HomeView> {
             const Text('Your Recent Reports', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             Expanded(
-              child: _isLoading 
-                ? const Center(child: CircularProgressIndicator())
-                : ListView.builder(
-                    itemCount: _myComplaints.length,
-                    itemBuilder: (context, index) {
-                      final item = _myComplaints[index];
-                      return _buildReportCard(item['title'], item['status'], Colors.orange);
-                    },
-                  ),
+              child: RefreshIndicator(
+                onRefresh: _fetchData,
+                child: _isLoading 
+                  ? const Center(child: CircularProgressIndicator())
+                  : _myComplaints.isEmpty 
+                    ? const Center(child: Text('No reports yet. Tap + to report an issue.'))
+                    : ListView.builder(
+                        itemCount: _myComplaints.length,
+                        itemBuilder: (context, index) {
+                          final item = _myComplaints[index];
+                          return _buildReportCard(item);
+                        },
+                      ),
+              ),
             ),
           ],
         ),
@@ -396,17 +430,243 @@ class _HomeViewState extends State<HomeView> {
     );
   }
 
-  Widget _buildReportCard(String title, String status, Color statusColor) {
+  Widget _buildReportCard(dynamic item) {
+    final status = item['status'] ?? 'Pending';
+    Color statusColor;
+    IconData statusIcon;
+
+    switch (status) {
+      case 'Resolved':
+        statusColor = const Color(0xFF10B981);
+        statusIcon = Icons.check_circle_outline;
+        break;
+      case 'In Progress':
+        statusColor = const Color(0xFF3B82F6);
+        statusIcon = Icons.loop;
+        break;
+      case 'Rejected':
+        statusColor = const Color(0xFFEF4444);
+        statusIcon = Icons.cancel_outlined;
+        break;
+      default:
+        statusColor = const Color(0xFFF59E0B);
+        statusIcon = Icons.hourglass_empty;
+    }
+
     return Card(
       color: const Color(0xFF1E293B),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: const Text('Status tracking enabled'),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(color: statusColor.withOpacity(0.1), borderRadius: BorderRadius.circular(20)),
-          child: Text(status, style: TextStyle(color: statusColor, fontSize: 12, fontWeight: FontWeight.bold)),
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => ComplaintDetailPage(complaint: item))),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: Container(
+          width: 50, height: 50,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            image: DecorationImage(
+              image: NetworkImage('$baseUrl/${item['image_url']}'),
+              fit: BoxFit.cover,
+              onError: (e, s) => {},
+            ),
+          ),
+          child: item['image_url'] == null ? const Icon(Icons.image) : null,
         ),
+        title: Text(item['issue_type'] ?? 'Issue Report', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4.0),
+          child: Row(
+            children: [
+              Icon(statusIcon, size: 14, color: statusColor),
+              const SizedBox(width: 4),
+              Text(status, style: TextStyle(color: statusColor, fontSize: 13, fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+        trailing: const Icon(Icons.chevron_right, color: Colors.white24),
+      ),
+    );
+  }
+}
+
+class ComplaintDetailPage extends StatelessWidget {
+  final dynamic complaint;
+  const ComplaintDetailPage({super.key, required this.complaint});
+
+  @override
+  Widget build(BuildContext context) {
+    final status = complaint['status'] ?? 'Pending';
+    final date = DateFormat('dd MMM yyyy, hh:mm a').format(DateTime.parse(complaint['created_at']));
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Report Details')),
+      body: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Image.network(
+                '$baseUrl/${complaint['image_url']}',
+                fit: BoxFit.cover,
+                errorBuilder: (c, e, s) => Container(color: Colors.grey[900], child: const Icon(Icons.broken_image, size: 50)),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(complaint['issue_type'] ?? 'Grievance', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Text('ID: COMP-${complaint['id']}', style: const TextStyle(color: Colors.white54, fontSize: 14)),
+                          ],
+                        ),
+                      ),
+                      _buildStatusBadge(status),
+                    ],
+                  ),
+                  const Divider(height: 40, color: Colors.white12),
+                  _buildDetailRow(Icons.business, 'Department', complaint['department'] ?? 'General'),
+                  const SizedBox(height: 16),
+                  _buildDetailRow(Icons.calendar_today, 'Reported On', date),
+                  const SizedBox(height: 16),
+                  _buildDetailRow(Icons.location_on, 'Location', '${complaint['latitude']}, ${complaint['longitude']}'),
+                  
+                  const SizedBox(height: 32),
+                  const Text('Updates & Progress', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  
+                  // Timeline view for updates
+                  _buildTimelineItem(
+                    'Complaint Registered',
+                    'Your report has been successfully recorded in our system.',
+                    date,
+                    isFirst: true,
+                    isLast: status == 'Pending',
+                    isDone: true,
+                  ),
+                  if (status != 'Pending')
+                    _buildTimelineItem(
+                      'Admin Review',
+                      'The local administration has reviewed your request.',
+                      'Updated by System',
+                      isLast: status == 'In Progress',
+                      isDone: status != 'Pending',
+                    ),
+                  if (status == 'Resolved')
+                    _buildTimelineItem(
+                      'Issue Resolved',
+                      'The department has completed the assigned task. Final validation success.',
+                      'Resolution Success',
+                      isLast: true,
+                      isDone: true,
+                      color: const Color(0xFF10B981),
+                    ),
+                  if (status == 'Rejected')
+                    _buildTimelineItem(
+                      'Request Rejected',
+                      'This report does not meet the necessary criteria or is a duplicate.',
+                      'Review Complete',
+                      isLast: true,
+                      isDone: true,
+                      color: const Color(0xFFEF4444),
+                    ),
+
+                  const SizedBox(height: 32),
+                  const Text('Description', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(color: const Color(0xFF1E293B), borderRadius: BorderRadius.circular(12)),
+                    child: Text(
+                      complaint['description'] ?? 'No description provided.',
+                      style: const TextStyle(color: Colors.white70, height: 1.5),
+                    ),
+                  ),
+                  const SizedBox(height: 40),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusBadge(String status) {
+    Color color = const Color(0xFFF59E0B);
+    if (status == 'Resolved') color = const Color(0xFF10B981);
+    if (status == 'Rejected') color = const Color(0xFFEF4444);
+    if (status == 'In Progress') color = const Color(0xFF3B82F6);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(12), border: Border.all(color: color.withOpacity(0.5))),
+      child: Text(status, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12)),
+    );
+  }
+
+  Widget _buildDetailRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: const Color(0xFF14B8A6)),
+        const SizedBox(width: 12),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTimelineItem(String title, String desc, String time, {bool isFirst = false, bool isLast = false, bool isDone = false, Color? color}) {
+    return IntrinsicHeight(
+      child: Row(
+        children: [
+          Column(
+            children: [
+              Container(
+                width: 12, height: 12,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isDone ? (color ?? const Color(0xFF14B8A6)) : Colors.white12,
+                ),
+              ),
+              if (!isLast)
+                Expanded(child: Container(width: 2, color: Colors.white12)),
+            ],
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: isDone ? Colors.white : Colors.white38)),
+                    Text(time, style: const TextStyle(fontSize: 10, color: Colors.white54)),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(desc, style: TextStyle(fontSize: 13, color: isDone ? Colors.white70 : Colors.white24)),
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -593,8 +853,13 @@ class _ReportIssuePageState extends State<ReportIssuePage> {
   }
 
   Future<void> _submitReport() async {
-    if (_image == null || _selectedDept == null || _selectedSub == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please complete all mandatory sections')));
+    if (_image == null && _recordedPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please provide at least a Photo or a Voice Recording')));
+      return;
+    }
+
+    if (_selectedDept == null || _selectedSub == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select Department and Subcategory')));
       return;
     }
 
@@ -602,24 +867,42 @@ class _ReportIssuePageState extends State<ReportIssuePage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('access_token');
+      print("DEBUG: Token retrieved: ${token != null ? 'YES' : 'NO'}");
 
-      // 1. Upload Image
-      var imgReq = http.MultipartRequest('POST', Uri.parse('$baseUrl/upload/'));
-      imgReq.files.add(await http.MultipartFile.fromPath('file', _image!.path));
-      var imgRes = await imgReq.send();
-      var imgData = json.decode(await imgRes.stream.bytesToString());
+      // 1. Upload Image (if exists)
+      String? imageUrl;
+      if (_image != null) {
+        print("DEBUG: Uploading image: ${_image!.path}");
+        var imgReq = http.MultipartRequest('POST', Uri.parse('$baseUrl/upload/'));
+        imgReq.files.add(await http.MultipartFile.fromPath('file', _image!.path));
+        var imgRes = await imgReq.send().timeout(const Duration(seconds: 30));
+        
+        if (imgRes.statusCode != 200) {
+          throw 'Image upload failed with status: ${imgRes.statusCode}';
+        }
+        
+        var imgData = json.decode(await imgRes.stream.bytesToString());
+        imageUrl = imgData['image_url'];
+        print("DEBUG: Image uploaded: $imageUrl");
+      }
 
       // 2. Upload Voice (if exists)
       String? voiceUrl;
       if (_recordedPath != null) {
+        print("DEBUG: Uploading voice: $_recordedPath");
         var voiceReq = http.MultipartRequest('POST', Uri.parse('$baseUrl/upload/'));
         voiceReq.files.add(await http.MultipartFile.fromPath('file', _recordedPath!));
-        var voiceRes = await voiceReq.send();
-        var voiceData = json.decode(await voiceRes.stream.bytesToString());
-        voiceUrl = voiceData['image_url'];
+        var voiceRes = await voiceReq.send().timeout(const Duration(seconds: 30));
+        
+        if (voiceRes.statusCode == 200) {
+          var voiceData = json.decode(await voiceRes.stream.bytesToString());
+          voiceUrl = voiceData['image_url'];
+          print("DEBUG: Voice uploaded: $voiceUrl");
+        }
       }
 
       // 3. Submit Complaint
+      print("DEBUG: Submitting complaint to $baseUrl/complaints/");
       final res = await http.post(
         Uri.parse('$baseUrl/complaints/'),
         headers: {
@@ -629,23 +912,47 @@ class _ReportIssuePageState extends State<ReportIssuePage> {
         body: json.encode({
           'title': '$_selectedSub at ${_selectedDept}',
           'description': _descController.text.isEmpty ? 'Reported Issue' : _descController.text,
-          'image_url': imgData['image_url'],
+          'image_url': imageUrl ?? '',
           'voice_url': voiceUrl,
           'latitude': _currentPosition?.latitude ?? 0.0,
           'longitude': _currentPosition?.longitude ?? 0.0,
           'department': _selectedDept,
           'subcategory': _selectedSub,
         }),
-      );
+      ).timeout(const Duration(seconds: 20));
 
+      print("DEBUG: Complaint response: ${res.statusCode}");
       if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report submitted successfully!'), backgroundColor: Colors.green));
         Navigator.pop(context);
+      } else if (res.statusCode == 401) {
+        _handleUnauthorizedReport();
+      } else {
+        var errorMsg = res.body;
+        try {
+          var errorData = json.decode(res.body);
+          errorMsg = errorData['detail'] ?? res.body;
+        } catch (_) {}
+        throw 'Submission failed (${res.statusCode}): $errorMsg';
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Submission Error: $e')));
+      print("DEBUG: Submission Error: $e");
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
     } finally {
-      setState(() => _isSubmitting = false);
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  void _handleUnauthorizedReport() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('access_token');
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginPage()),
+        (route) => false,
+      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session expired. Please login again.')));
     }
   }
 
@@ -658,26 +965,32 @@ class _ReportIssuePageState extends State<ReportIssuePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildSectionHeader('1. Photo Upload (Mandatory)', Icons.camera_alt),
-            _buildPhotoSection(),
+            _buildSectionHeader('1. Voice Recording (Optional)', Icons.mic),
+            _buildVoiceSection(),
+            const SizedBox(height: 24),
             
-            if (_image != null) ...[
+            _buildSectionHeader('2. Photo Upload (Optional)', Icons.camera_alt),
+            _buildPhotoSection(),
+            const SizedBox(height: 12),
+            const Text('* Provide at least Photo or Voice', style: TextStyle(color: Colors.white54, fontSize: 12)),
+            
+            if (_image != null || _recordedPath != null) ...[
               const SizedBox(height: 24),
-              _buildSectionHeader('2. Select Department', Icons.business),
+              _buildSectionHeader('3. Select Department', Icons.business),
               _buildDeptGrid(),
               
               if (_selectedDept != null) ...[
                 const SizedBox(height: 24),
-                _buildSectionHeader('3. Select Subcategory', Icons.category),
+                _buildSectionHeader('4. Select Subcategory', Icons.category),
                 _buildSubGrid(),
               ],
 
               const SizedBox(height: 24),
-              _buildSectionHeader('4. Additional Info', Icons.info_outline),
+              _buildSectionHeader('5. Additional Info', Icons.info_outline),
               _buildAdditionalInfo(),
 
               const SizedBox(height: 24),
-              _buildSectionHeader('5. Location Detection', Icons.location_on),
+              _buildSectionHeader('6. Location Detection', Icons.location_on),
               _buildLocationSection(),
 
               const SizedBox(height: 32),
@@ -828,6 +1141,34 @@ class _ReportIssuePageState extends State<ReportIssuePage> {
     );
   }
 
+  Widget _buildVoiceSection() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: const Color(0xFF1E293B), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFF334155))),
+      child: Row(
+        children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: _isRecording ? _stopRecording : _startRecording,
+              icon: Icon(_isRecording ? Icons.stop : Icons.mic, color: Colors.white),
+              label: Text(_isRecording ? 'Stopping (${_recordDuration}s)' : 'Record Voice Info'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isRecording ? Colors.redAccent : const Color(0xFF334155),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ),
+          if (_recordedPath != null) ...[
+            const SizedBox(width: 10),
+            IconButton(onPressed: _playRecording, icon: const Icon(Icons.play_circle, size: 40, color: Color(0xFF14B8A6))),
+            IconButton(onPressed: () => setState(() => _recordedPath = null), icon: const Icon(Icons.delete, color: Colors.red)),
+          ]
+        ],
+      ),
+    );
+  }
+
   Widget _buildAdditionalInfo() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -843,24 +1184,6 @@ class _ReportIssuePageState extends State<ReportIssuePage> {
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
           ),
         ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: _isRecording ? _stopRecording : _startRecording,
-                icon: Icon(_isRecording ? Icons.stop : Icons.mic, color: Colors.white),
-                label: Text(_isRecording ? 'Stopping (${_recordDuration}s)' : 'Record Voice Info'),
-                style: ElevatedButton.styleFrom(backgroundColor: _isRecording ? Colors.redAccent : Colors.blueGrey),
-              ),
-            ),
-            if (_recordedPath != null) ...[
-              const SizedBox(width: 10),
-              IconButton(onPressed: _playRecording, icon: const Icon(Icons.play_circle, size: 40, color: Color(0xFF14B8A6))),
-              IconButton(onPressed: () => setState(() => _recordedPath = null), icon: const Icon(Icons.delete, color: Colors.red)),
-            ]
-          ],
-        )
       ],
     );
   }
