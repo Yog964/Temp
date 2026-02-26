@@ -25,7 +25,9 @@ class Complaint(Base):
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
     status = Column(String, default="Pending")
-    issue_type = Column(String, nullable=True)
+    issue_type = Column(String, nullable=True) # This is subcategory select
+    department = Column(String, nullable=True)
+    voice_url = Column(String, nullable=True)
     severity_score = Column(Float, nullable=True)
     confidence_score = Column(Float, nullable=True)
     department_suggested = Column(String, nullable=True)

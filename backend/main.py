@@ -110,8 +110,10 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @app.post("/upload/", response_model=dict)
 async def upload_file(file: UploadFile = File(...)):
-    # In reality this should go to cloud storage
-    file_location = f"{UPLOAD_DIR}/{file.filename}"
+    import uuid
+    file_extension = os.path.splitext(file.filename)[1]
+    unique_filename = f"{uuid.uuid4()}{file_extension}"
+    file_location = f"{UPLOAD_DIR}/{unique_filename}"
     with open(file_location, "wb+") as file_object:
         file_object.write(file.file.read())
     return {"image_url": file_location}
@@ -129,13 +131,15 @@ def create_complaint(complaint: schemas.ComplaintCreate, db: Session = Depends(g
         title=complaint.title,
         description=complaint.description,
         image_url=complaint.image_url,
+        voice_url=complaint.voice_url,
         latitude=complaint.latitude,
         longitude=complaint.longitude,
         reporter_id=current_user.id,
-        issue_type=ai_issue_type,
+        department=complaint.department,
+        issue_type=complaint.subcategory, # Maps to subcategory select
         severity_score=ai_severity,
         confidence_score=ai_confidence,
-        department_suggested=ai_dept
+        department_suggested=ai_dept # Predicted
     )
     
     db.add(new_complaint)

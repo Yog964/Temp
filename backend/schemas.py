@@ -35,14 +35,18 @@ class ComplaintBase(BaseModel):
     image_url: str 
     
 class ComplaintCreate(ComplaintBase):
-    pass
+    department: str
+    subcategory: str # This maps to issue_type in DB
+    voice_url: Optional[str] = None
 
 class ComplaintAIResponse(ComplaintBase):
     id: int
     status: str
     created_at: datetime.datetime
     reporter_id: int
-    issue_type: Optional[str] = None
+    department: Optional[str] = None
+    voice_url: Optional[str] = None
+    issue_type: Optional[str] = None # This is subcategory select
     severity_score: Optional[float] = None
     confidence_score: Optional[float] = None
     department_suggested: Optional[str] = None

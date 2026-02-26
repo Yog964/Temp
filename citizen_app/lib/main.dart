@@ -6,6 +6,11 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter/foundation.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:record/record.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:async';
 
 // Automatically determine the correct baseUrl for the environment
 String getBaseUrl() {
@@ -458,103 +463,462 @@ class ReportIssuePage extends StatefulWidget {
 class _ReportIssuePageState extends State<ReportIssuePage> {
   File? _image;
   final picker = ImagePicker();
-  bool _isAnalyzing = false;
-  Map<String, dynamic>? _aiData;
+  
+  String? _selectedDept;
+  String? _selectedSub;
+  final TextEditingController _descController = TextEditingController();
+  
+  // Location
+  Position? _currentPosition;
+  bool _isFetchingLocation = false;
 
-  Future getImage() async {
-    final pickedFile = await picker.pickImage(source: ImageSource.camera);
-    if (pickedFile == null) return;
+  // Recording
+  final AudioRecorder _audioRecorder = AudioRecorder();
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  String? _recordedPath;
+  bool _isRecording = false;
+  int _recordDuration = 0;
+  Timer? _timer;
 
+  bool _isSubmitting = false;
+
+  final Map<String, List<String>> _departmentData = {
+    'Water Supply': ['Water Leakage', 'Low Water Pressure', 'Broken Pipeline', 'No Water Supply'],
+    'Electricity': ['Exposed Wire', 'Power Failure', 'Transformer Issue'],
+    'Road & Infrastructure': ['Pothole', 'Road Crack', 'Blocked Drain', 'Broken Footpath'],
+    'Waste Management': ['Garbage Heap', 'Stray Animal Issue', 'Drainage Block'],
+    'Streetlight Maintenance': ['Light Not Working', 'Continuous Dimm'],
+    'Sanitation': ['Clogged Sewer', 'Public Toilet Issue'],
+  };
+
+  @override
+  void dispose() {
+    _descController.dispose();
+    _audioRecorder.dispose();
+    _audioPlayer.dispose();
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final pickedFile = await picker.pickImage(source: source);
+    if (pickedFile != null) {
+      setState(() {
+        _image = File(pickedFile.path);
+      });
+      _determinePosition();
+    }
+  }
+
+  Future<void> _determinePosition() async {
+    if (_isFetchingLocation) return;
+    setState(() => _isFetchingLocation = true);
+    print("DEBUG: Starting location fetch...");
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        print("DEBUG: Location services disabled");
+        throw 'Location services are disabled.';
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      print("DEBUG: Current permission: $permission");
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          print("DEBUG: Permission denied");
+          throw 'Location permissions are denied';
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        print("DEBUG: Permission denied forever");
+        throw 'Location permissions are permanently denied';
+      }
+
+      print("DEBUG: Fetching current position...");
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 5),
+      );
+      print("DEBUG: Position fetched: ${pos.latitude}, ${pos.longitude}");
+      
+      setState(() {
+        _currentPosition = pos;
+        _isFetchingLocation = false;
+      });
+    } catch (e) {
+      print('DEBUG: Location Error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Location Error: $e')));
+      }
+      setState(() => _isFetchingLocation = false);
+    }
+  }
+
+  Future<void> _startRecording() async {
+    try {
+      if (await _audioRecorder.hasPermission()) {
+        final dir = await getApplicationDocumentsDirectory();
+        final path = '${dir.path}/record_${DateTime.now().millisecondsSinceEpoch}.m4a';
+        
+        await _audioRecorder.start(const RecordConfig(), path: path);
+        setState(() {
+          _isRecording = true;
+          _recordDuration = 0;
+        });
+        _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+          setState(() => _recordDuration++);
+          if (_recordDuration >= 60) _stopRecording();
+        });
+      }
+    } catch (e) {
+      print('Recording error: $e');
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    final path = await _audioRecorder.stop();
+    _timer?.cancel();
     setState(() {
-      _image = File(pickedFile.path);
-      _isAnalyzing = true;
+      _isRecording = false;
+      _recordedPath = path;
     });
+  }
 
+  Future<void> _playRecording() async {
+    if (_recordedPath != null) {
+      await _audioPlayer.play(DeviceFileSource(_recordedPath!));
+    }
+  }
+
+  Future<void> _submitReport() async {
+    if (_image == null || _selectedDept == null || _selectedSub == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please complete all mandatory sections')));
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('access_token');
 
-      // 1. Upload File
-      var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/upload/'));
-      request.files.add(await http.MultipartFile.fromPath('file', _image!.path));
-      var uploadRes = await request.send();
-      var uploadData = json.decode(await uploadRes.stream.bytesToString());
+      // 1. Upload Image
+      var imgReq = http.MultipartRequest('POST', Uri.parse('$baseUrl/upload/'));
+      imgReq.files.add(await http.MultipartFile.fromPath('file', _image!.path));
+      var imgRes = await imgReq.send();
+      var imgData = json.decode(await imgRes.stream.bytesToString());
 
-      // 2. Create Complaint (Back-end does AI analysis mock internally)
-      final complaintRes = await http.post(
+      // 2. Upload Voice (if exists)
+      String? voiceUrl;
+      if (_recordedPath != null) {
+        var voiceReq = http.MultipartRequest('POST', Uri.parse('$baseUrl/upload/'));
+        voiceReq.files.add(await http.MultipartFile.fromPath('file', _recordedPath!));
+        var voiceRes = await voiceReq.send();
+        var voiceData = json.decode(await voiceRes.stream.bytesToString());
+        voiceUrl = voiceData['image_url'];
+      }
+
+      // 3. Submit Complaint
+      final res = await http.post(
         Uri.parse('$baseUrl/complaints/'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
         body: json.encode({
-          'title': 'New Issue Spotted',
-          'description': 'Reported via mobile',
-          'image_url': uploadData['image_url'],
-          'latitude': 28.6139,
-          'longitude': 77.2090,
+          'title': '$_selectedSub at ${_selectedDept}',
+          'description': _descController.text.isEmpty ? 'Reported Issue' : _descController.text,
+          'image_url': imgData['image_url'],
+          'voice_url': voiceUrl,
+          'latitude': _currentPosition?.latitude ?? 0.0,
+          'longitude': _currentPosition?.longitude ?? 0.0,
+          'department': _selectedDept,
+          'subcategory': _selectedSub,
         }),
       );
 
-      if (complaintRes.statusCode == 200) {
-        setState(() {
-          _aiData = json.decode(complaintRes.body);
-          _isAnalyzing = false;
-        });
-        _showAiSuggestion();
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report submitted successfully!'), backgroundColor: Colors.green));
+        Navigator.pop(context);
       }
     } catch (e) {
-      print('Error in report flow: $e');
-      setState(() => _isAnalyzing = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Submission Error: $e')));
+    } finally {
+      setState(() => _isSubmitting = false);
     }
   }
-
-  void _showAiSuggestion() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1E293B),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('AI Analysis Result', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 16),
-            _row('Issue', _aiData?['issue_type']),
-            _row('Dept', _aiData?['department_suggested']),
-            _row('Severity', '${_aiData?['severity_score']}/10'),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: () { Navigator.pop(context); Navigator.pop(context); },
-              style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
-              child: const Text('Confirm & Submit'),
-            )
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _row(String l, String? v) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(l), Text(v ?? '...', style: const TextStyle(fontWeight: FontWeight.bold))]),
-  );
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Report Issue')),
-      body: Center(
+      appBar: AppBar(title: const Text('New Service Request')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (_image != null) Image.file(_image!, height: 300),
-            if (_isAnalyzing) const CircularProgressIndicator(),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(onPressed: getImage, icon: const Icon(Icons.camera), label: const Text('Capture Issue')),
+            _buildSectionHeader('1. Photo Upload (Mandatory)', Icons.camera_alt),
+            _buildPhotoSection(),
+            
+            if (_image != null) ...[
+              const SizedBox(height: 24),
+              _buildSectionHeader('2. Select Department', Icons.business),
+              _buildDeptGrid(),
+              
+              if (_selectedDept != null) ...[
+                const SizedBox(height: 24),
+                _buildSectionHeader('3. Select Subcategory', Icons.category),
+                _buildSubGrid(),
+              ],
+
+              const SizedBox(height: 24),
+              _buildSectionHeader('4. Additional Info', Icons.info_outline),
+              _buildAdditionalInfo(),
+
+              const SizedBox(height: 24),
+              _buildSectionHeader('5. Location Detection', Icons.location_on),
+              _buildLocationSection(),
+
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _isSubmitting ? null : _submitReport,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    backgroundColor: const Color(0xFF14B8A6),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: _isSubmitting 
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Text('SUBMIT TO BACKEND', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                ),
+              ),
+              const SizedBox(height: 40),
+            ]
           ],
         ),
       ),
     );
   }
+
+  Widget _buildSectionHeader(String title, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Icon(icon, color: const Color(0xFF14B8A6), size: 20),
+          const SizedBox(width: 8),
+          Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPhotoSection() {
+    return InkWell(
+      onTap: () => _showPickerOptions(),
+      child: Container(
+        height: 200,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(color: const Color(0xFF334155)),
+          image: _image != null ? DecorationImage(image: FileImage(_image!), fit: BoxFit.cover) : null,
+        ),
+        child: _image == null 
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.add_a_photo, size: 50, color: Colors.blueGrey[300]),
+                const SizedBox(height: 8),
+                const Text('Tap to Take Photo', style: TextStyle(color: Colors.grey)),
+              ],
+            )
+          : Stack(
+              children: [
+                Positioned(
+                  right: 10, top: 10,
+                  child: CircleAvatar(
+                    backgroundColor: Colors.black54,
+                    child: IconButton(icon: const Icon(Icons.edit, color: Colors.white), onPressed: _showPickerOptions),
+                  ),
+                )
+              ],
+            ),
+      ),
+    );
+  }
+
+  void _showPickerOptions() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E293B),
+      builder: (c) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(leading: const Icon(Icons.camera), title: const Text('Camera'), onTap: () { Navigator.pop(c); _pickImage(ImageSource.camera); }),
+            ListTile(leading: const Icon(Icons.image), title: const Text('Gallery'), onTap: () { Navigator.pop(c); _pickImage(ImageSource.gallery); }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeptGrid() {
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        childAspectRatio: 2.5,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+      ),
+      itemCount: _departmentData.keys.length,
+      itemBuilder: (context, index) {
+        String dept = _departmentData.keys.elementAt(index);
+        bool isSelected = _selectedDept == dept;
+        return GestureDetector(
+          onTap: () => setState(() { _selectedDept = dept; _selectedSub = null; }),
+          child: Container(
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: isSelected ? const Color(0xFF14B8A6) : const Color(0xFF1E293B),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: isSelected ? Colors.transparent : const Color(0xFF334155)),
+            ),
+            child: Text(dept, textAlign: TextAlign.center, style: TextStyle(color: isSelected ? Colors.white : Colors.grey, fontWeight: FontWeight.bold, fontSize: 13)),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSubGrid() {
+    List<String> subs = _departmentData[_selectedDept] ?? [];
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        childAspectRatio: 2.5,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+      ),
+      itemCount: subs.length,
+      itemBuilder: (context, index) {
+        String sub = subs[index];
+        bool isSelected = _selectedSub == sub;
+        return GestureDetector(
+          onTap: () => setState(() => _selectedSub = sub),
+          child: Container(
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: isSelected ? const Color(0xFF3B82F6) : const Color(0xFF1E293B).withOpacity(0.5),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: isSelected ? Colors.transparent : const Color(0xFF334155)),
+            ),
+            child: Text(sub, textAlign: TextAlign.center, style: TextStyle(color: isSelected ? Colors.white : Colors.grey, fontWeight: FontWeight.bold, fontSize: 13)),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAdditionalInfo() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: _descController,
+          maxLines: 4,
+          maxLength: 500,
+          decoration: InputDecoration(
+            hintText: 'Describe the issue (Optional)...',
+            filled: true,
+            fillColor: const Color(0xFF1E293B),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: _isRecording ? _stopRecording : _startRecording,
+                icon: Icon(_isRecording ? Icons.stop : Icons.mic, color: Colors.white),
+                label: Text(_isRecording ? 'Stopping (${_recordDuration}s)' : 'Record Voice Info'),
+                style: ElevatedButton.styleFrom(backgroundColor: _isRecording ? Colors.redAccent : Colors.blueGrey),
+              ),
+            ),
+            if (_recordedPath != null) ...[
+              const SizedBox(width: 10),
+              IconButton(onPressed: _playRecording, icon: const Icon(Icons.play_circle, size: 40, color: Color(0xFF14B8A6))),
+              IconButton(onPressed: () => setState(() => _recordedPath = null), icon: const Icon(Icons.delete, color: Colors.red)),
+            ]
+          ],
+        )
+      ],
+    );
+  }
+
+  Widget _buildLocationSection() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: const Color(0xFF1E293B), borderRadius: BorderRadius.circular(12)),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Auto-Fetched Location', style: TextStyle(color: Colors.white70)),
+              if (_isFetchingLocation) const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              else IconButton(onPressed: _determinePosition, icon: const Icon(Icons.refresh, color: Color(0xFF14B8A6))),
+            ],
+          ),
+          const Divider(color: Color(0xFF334155)),
+          Row(
+            children: [
+              _locBox('Latitude', _currentPosition?.latitude.toString() ?? '...'),
+              const SizedBox(width: 12),
+              _locBox('Longitude', _currentPosition?.longitude.toString() ?? '...'),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            height: 120, width: double.infinity,
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A), 
+              borderRadius: BorderRadius.circular(10),
+              image: const DecorationImage(
+                image: NetworkImage('https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?auto=format&fit=crop&q=80&w=400'), // Placeholder Map
+                fit: BoxFit.cover,
+                opacity: 0.5
+              )
+            ),
+            child: const Center(child: Icon(Icons.map, color: Colors.white24, size: 50)),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _locBox(String l, String v) => Expanded(
+    child: Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: const Color(0xFF0F172A), borderRadius: BorderRadius.circular(8)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(l, style: const TextStyle(color: Colors.grey, fontSize: 10)),
+          const SizedBox(height: 4),
+          Text(v, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12), overflow: TextOverflow.ellipsis),
+        ],
+      ),
+    ),
+  );
 }
+

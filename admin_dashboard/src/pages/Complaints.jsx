@@ -95,12 +95,21 @@ export default function Complaints() {
                                     <p className="complaint-detail-item">
                                         <MapPin size={16} /> Lat: {complaint.latitude}, Lng: {complaint.longitude}
                                     </p>
-                                    <p className="complaint-detail-item">
-                                        <AlertTriangle size={16} color="var(--primary-500)" /> AI Priority Score: {complaint.severity_score}/10
+                                    <p className="complaint-detail-item" style={{ fontWeight: 'bold', color: 'var(--primary-400)' }}>
+                                        Dept: {complaint.department}
                                     </p>
-                                    <p className="complaint-detail-item">
-                                        <MessageCircle size={16} /> AI Suggested: {complaint.department_suggested}
-                                    </p>
+                                    {complaint.description && (
+                                        <p className="complaint-detail-item" style={{ fontSize: '0.8rem', color: 'var(--gray-400)' }}>
+                                            "{complaint.description}"
+                                        </p>
+                                    )}
+                                    {complaint.voice_url && (
+                                        <div className="complaint-detail-item" style={{ marginTop: '0.5rem' }}>
+                                            <audio controls style={{ height: '30px', width: '100%' }}>
+                                                <source src={`http://localhost:8000/${complaint.voice_url}`} type="audio/mpeg" />
+                                            </audio>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="complaint-footer">
