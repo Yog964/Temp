@@ -1,39 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Filter, AlertTriangle, MessageCircle, MapPin, Search, ChevronDown } from 'lucide-react';
-
-const mockComplaints = [
-    {
-        id: 'COMP-2024-0012',
-        type: 'Pothole',
-        category: 'Roads & Bridges',
-        confidence: '94%',
-        priority: 'High',
-        priorityScore: 8.4,
-        reporter: '+91 9876543210',
-        location: 'MG Road, near Metro Pillar 42',
-        date: '10 mins ago',
-        status: 'Pending Assignment',
-        votes: 24,
-        image: 'https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&q=80&w=400'
-    },
-    {
-        id: 'COMP-2024-0045',
-        type: 'Garbage Dump',
-        category: 'Waste Mgmt',
-        confidence: '88%',
-        priority: 'Critical',
-        priorityScore: 9.1,
-        reporter: '+91 9876543211',
-        location: 'Sector 14 Market Area',
-        date: '1 hr ago',
-        status: 'In Progress',
-        votes: 56,
-        image: 'https://images.unsplash.com/photo-1532996122724-e3c354a0b15b?auto=format&fit=crop&q=80&w=400'
-    }
-];
+import { fetchComplaints } from '../api';
 
 export default function Complaints() {
     const [activeTab, setActiveTab] = useState('all');
+    const [complaints, setComplaints] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const load = async () => {
+            const data = await fetchComplaints();
+            setComplaints(data);
+            setLoading(false);
+        };
+        load();
+    }, []);
+
+    const filteredComplaints = complaints.filter(c => {
+        if (activeTab === 'all') return true;
+        if (activeTab === 'high-priority') return c.severity_score >= 8;
+        if (activeTab === 'pending') return c.status === 'Pending';
+        if (activeTab === 'resolved') return c.status === 'Resolved';
+        return true;
+    });
 
     return (
         <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -71,57 +60,74 @@ export default function Complaints() {
                 </button>
             </div>
 
-            <div className="grid grid-cols-12" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '1.5rem' }}>
-                {mockComplaints.map(complaint => (
-                    <div key={complaint.id} className="glass-card complaint-card">
-                        <div className="complaint-img-container">
-                            <img src={complaint.image} alt={complaint.type} className="complaint-img" />
-                            <div className="complaint-badge">
-                                AI Match: {complaint.confidence}
+            {loading ? (
+                <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>Loading complaints...</div>
+            ) : (
+                <div className="grid grid-cols-12" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '1.5rem' }}>
+                    {filteredComplaints.map(complaint => (
+                        <div key={complaint.id} className="glass-card complaint-card">
+                            <div className="complaint-img-container">
+                                <img
+                                    src={`http://localhost:8000/${complaint.image_url}`}
+                                    alt={complaint.issue_type}
+                                    className="complaint-img"
+                                    onError={(e) => {
+                                        e.target.src = 'https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&q=80&w=400';
+                                    }}
+                                />
+                                <div className="complaint-badge">
+                                    AI Match: {Math.round(complaint.confidence_score)}%
+                                </div>
+                            </div>
+
+                            <div className="complaint-content">
+                                <div className="complaint-header">
+                                    <div>
+                                        <span className="complaint-id">COMP-{complaint.id}</span>
+                                        <h3 className="complaint-title">{complaint.issue_type || 'Unknown Issue'}</h3>
+                                    </div>
+                                    <div className={`complaint-priority priority-${complaint.severity_score >= 8 ? 'Critical' : 'High'}`}>
+                                        {complaint.severity_score >= 8 ? 'Critical' : 'High'}
+                                    </div>
+                                </div>
+
+                                <div className="complaint-details">
+                                    <p className="complaint-detail-item">
+                                        <MapPin size={16} /> Lat: {complaint.latitude}, Lng: {complaint.longitude}
+                                    </p>
+                                    <p className="complaint-detail-item">
+                                        <AlertTriangle size={16} color="var(--primary-500)" /> AI Priority Score: {complaint.severity_score}/10
+                                    </p>
+                                    <p className="complaint-detail-item">
+                                        <MessageCircle size={16} /> AI Suggested: {complaint.department_suggested}
+                                    </p>
+                                </div>
+
+                                <div className="complaint-footer">
+                                    <div className="complaint-meta">
+                                        <p style={{ marginBottom: '0.25rem' }}>Status: {complaint.status}</p>
+                                        <p>{new Date(complaint.created_at).toLocaleDateString()}</p>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                        <button className="btn-outline">
+                                            Reject
+                                        </button>
+                                        <button className="btn-small-primary">
+                                            Assign Worker
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-
-                        <div className="complaint-content">
-                            <div className="complaint-header">
-                                <div>
-                                    <span className="complaint-id">{complaint.id}</span>
-                                    <h3 className="complaint-title">{complaint.type}</h3>
-                                </div>
-                                <div className={`complaint-priority priority-${complaint.priority}`}>
-                                    {complaint.priority}
-                                </div>
-                            </div>
-
-                            <div className="complaint-details">
-                                <p className="complaint-detail-item">
-                                    <MapPin size={16} /> {complaint.location}
-                                </p>
-                                <p className="complaint-detail-item">
-                                    <AlertTriangle size={16} color="var(--primary-500)" /> AI Priority Score: {complaint.priorityScore}/10
-                                </p>
-                                <p className="complaint-detail-item">
-                                    <MessageCircle size={16} /> {complaint.votes} Community Approvals
-                                </p>
-                            </div>
-
-                            <div className="complaint-footer">
-                                <div className="complaint-meta">
-                                    <p style={{ marginBottom: '0.25rem' }}>Reporter: {complaint.reporter}</p>
-                                    <p>{complaint.date}</p>
-                                </div>
-                                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                    <button className="btn-outline">
-                                        Reject
-                                    </button>
-                                    <button className="btn-small-primary">
-                                        Assign Worker
-                                    </button>
-                                </div>
-                            </div>
+                    ))}
+                    {filteredComplaints.length === 0 && (
+                        <div className="glass-panel" style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center' }}>
+                            <h3 style={{ color: 'white' }}>No complaints found</h3>
+                            <p className="subtitle">Reported issues will appear here after users upload them.</p>
                         </div>
-                    </div>
-                ))}
-            </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }

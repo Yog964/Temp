@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { TrendingUp, AlertCircle, CheckCircle2, Clock } from 'lucide-react';
+import { fetchStats } from '../api';
 
-const data = [
+const chartData = [
     { name: 'Jan', value: 400 },
     { name: 'Feb', value: 300 },
     { name: 'Mar', value: 500 },
@@ -57,6 +58,16 @@ const DepartmentRow = ({ name, total, open, resolved, progress }) => (
 );
 
 export default function Dashboard() {
+    const [stats, setStats] = useState({ total: 0, critical: 0, resolutionRate: 0, avgSLA: '...' });
+
+    useEffect(() => {
+        const load = async () => {
+            const data = await fetchStats();
+            if (data) setStats(data);
+        };
+        load();
+    }, []);
+
     return (
         <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
             <div className="page-header">
@@ -70,10 +81,10 @@ export default function Dashboard() {
             </div>
 
             <div className="grid grid-cols-4">
-                <StatCard title="Total Complaints" value="12,400" icon={TrendingUp} trend="+12%" colorClass="color-primary" />
-                <StatCard title="Critical Incidents" value="45" icon={AlertCircle} trend="-5%" colorClass="color-red" />
-                <StatCard title="Resolution Rate" value="89%" icon={CheckCircle2} trend="+2%" colorClass="color-green" />
-                <StatCard title="Avg SLA Time" value="14 hrs" icon={Clock} trend="-1 hr" colorClass="color-blue" />
+                <StatCard title="Total Complaints" value={stats.total} icon={TrendingUp} trend="+12%" colorClass="color-primary" />
+                <StatCard title="Critical Incidents" value={stats.critical} icon={AlertCircle} trend="-5%" colorClass="color-red" />
+                <StatCard title="Resolution Rate" value={`${stats.resolutionRate}%`} icon={CheckCircle2} trend="+2%" colorClass="color-green" />
+                <StatCard title="Avg SLA Time" value={stats.avgSLA} icon={Clock} trend="-1 hr" colorClass="color-blue" />
             </div>
 
             <div className="grid grid-cols-3">
@@ -84,7 +95,7 @@ export default function Dashboard() {
                     </div>
                     <div style={{ height: '18rem', width: '100%' }}>
                         <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={data}>
+                            <AreaChart data={chartData}>
                                 <defs>
                                     <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
                                         <stop offset="5%" stopColor="#14b8a6" stopOpacity={0.3} />

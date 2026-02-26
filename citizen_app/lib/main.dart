@@ -1,41 +1,100 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
-import 'dart:math';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
+import 'package:flutter/foundation.dart';
 
-void main() {
-  runApp(const UrbanSathiApp());
+// Automatically determine the correct baseUrl for the environment
+String getBaseUrl() {
+  if (kIsWeb) return 'http://localhost:8000';
+  if (Platform.isAndroid) return 'http://10.0.2.2:8000';
+  return 'http://localhost:8000';
+}
+final String baseUrl = getBaseUrl();
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final prefs = await SharedPreferences.getInstance();
+  final String? token = prefs.getString('access_token');
+  
+  runApp(UrbanSathiApp(initialPage: token != null ? const DashboardPage() : const LoginPage()));
 }
 
 class UrbanSathiApp extends StatelessWidget {
-  const UrbanSathiApp({super.key});
+  final Widget initialPage;
+  const UrbanSathiApp({super.key, required this.initialPage});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'UrbanSathi',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        primaryColor: const Color(0xFF14B8A6), // Teal 500
-        scaffoldBackgroundColor: const Color(0xFF0F172A), // Slate 900
+        primaryColor: const Color(0xFF14B8A6),
+        scaffoldBackgroundColor: const Color(0xFF0F172A),
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF14B8A6),
-          secondary: Color(0xFF3B82F6), // Blue 500
-          surface: Color(0xFF1E293B), // Slate 800
+          secondary: Color(0xFF3B82F6),
+          surface: Color(0xFF1E293B),
         ),
         fontFamily: 'Roboto',
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF0F172A),
-          elevation: 0,
-        ),
       ),
-      home: const LoginPage(),
+      home: initialPage,
     );
   }
 }
 
-class LoginPage extends StatelessWidget {
+class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
+
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final _phoneController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
+
+  Future<void> _login() async {
+    setState(() => _isLoading = true);
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/token'),
+        body: {
+          'username': _phoneController.text,
+          'password': _passwordController.text,
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('access_token', data['access_token']);
+        
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const DashboardPage()),
+          );
+        }
+      } else {
+        _showError('Invalid phone number or password');
+      }
+    } catch (e) {
+      _showError('Connection error: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -56,66 +115,33 @@ class LoginPage extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Spacer(),
-                const Icon(
-                  Icons.location_city_rounded,
-                  size: 80,
-                  color: Color(0xFF14B8A6),
-                ),
+                const Icon(Icons.location_city_rounded, size: 80, color: Color(0xFF14B8A6)),
                 const SizedBox(height: 24),
-                const Text(
-                  'UrbanSathi',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Smart Urban Grievance & Service Response System',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.white70,
-                  ),
-                ),
+                const Text('UrbanSathi', textAlign: TextAlign.center, style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
                 const SizedBox(height: 48),
                 TextFormField(
-                  decoration: InputDecoration(
-                    hintText: 'Mobile Number',
-                    prefixIcon: const Icon(Icons.phone),
-                    filled: true,
-                    fillColor: Colors.white.withOpacity(0.05),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
+                  controller: _phoneController,
+                  decoration: _inputDecoration('Phone Number', Icons.phone),
                   keyboardType: TextInputType.phone,
                 ),
                 const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(builder: (context) => const OtpPage()),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF14B8A6),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+                TextFormField(
+                  controller: _passwordController,
+                  decoration: _inputDecoration('Password', Icons.lock),
+                  obscureText: true,
+                ),
+                const SizedBox(height: 16),
+                _isLoading 
+                  ? const Center(child: CircularProgressIndicator())
+                  : ElevatedButton(
+                      onPressed: _login,
+                      style: _btnStyle(),
+                      child: const Text('Login', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                     ),
-                    elevation: 8,
-                    shadowColor: const Color(0xFF14B8A6).withOpacity(0.5),
-                  ),
-                  child: const Text(
-                    'Send OTP',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
+                const SizedBox(height: 24),
+                TextButton(
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const RegisterPage())),
+                  child: const Text("Don't have an account? Register", style: TextStyle(color: Color(0xFF14B8A6))),
                 ),
                 const Spacer(),
               ],
@@ -125,94 +151,110 @@ class LoginPage extends StatelessWidget {
       ),
     );
   }
+
+  InputDecoration _inputDecoration(String label, IconData icon) {
+    return InputDecoration(
+      hintText: label,
+      prefixIcon: Icon(icon),
+      filled: true,
+      fillColor: Colors.white.withOpacity(0.05),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+    );
+  }
+
+  ButtonStyle _btnStyle() {
+    return ElevatedButton.styleFrom(
+      backgroundColor: const Color(0xFF14B8A6),
+      foregroundColor: Colors.white,
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    );
+  }
 }
 
-class OtpPage extends StatelessWidget {
-  const OtpPage({super.key});
+class RegisterPage extends StatefulWidget {
+  const RegisterPage({super.key});
+
+  @override
+  State<RegisterPage> createState() => _RegisterPageState();
+}
+
+class _RegisterPageState extends State<RegisterPage> {
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
+
+  Future<void> _register() async {
+    setState(() => _isLoading = true);
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/register'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'name': _nameController.text,
+          'phone_number': _phoneController.text,
+          'password': _passwordController.text,
+        }),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Registration successful! Please login.')));
+          Navigator.pop(context);
+        }
+      } else {
+        _showError('Registration failed: ${json.decode(response.body)['detail']}');
+      }
+    } catch (e) {
+      _showError('Connection error: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios),
-          onPressed: () => Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => const LoginPage()),
-          ),
-        ),
-      ),
+      appBar: AppBar(title: const Text('Register')),
       body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24.0),
+        padding: const EdgeInsets.all(24.0),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'Verify OTP',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-            ),
+            TextFormField(controller: _nameController, decoration: _inputDecoration('Full Name', Icons.person)),
             const SizedBox(height: 16),
-            const Text(
-              'Enter the 4-digit code sent to your mobile',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white70),
-            ),
-            const SizedBox(height: 32),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: List.generate(
-                4,
-                (index) => SizedBox(
-                  width: 50,
-                  child: TextFormField(
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: Colors.white.withOpacity(0.05),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                    onChanged: (value) {
-                      if (value.length == 1 && index < 3) {
-                        FocusScope.of(context).nextFocus();
-                      }
-                      if (index == 3 && value.length == 1) {
-                         Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(builder: (context) => const DashboardPage()),
-                        );
-                      }
-                    },
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 32),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (context) => const DashboardPage()),
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF14B8A6),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              child: const Text('Verify & Login'),
-            ),
+            TextFormField(controller: _phoneController, decoration: _inputDecoration('Phone Number', Icons.phone)),
+            const SizedBox(height: 16),
+            TextFormField(controller: _passwordController, decoration: _inputDecoration('Password', Icons.lock), obscureText: true),
+            const SizedBox(height: 24),
+            _isLoading 
+              ? const CircularProgressIndicator()
+              : ElevatedButton(onPressed: _register, style: _btnStyle(), child: const Text('Create Account', style: TextStyle(fontWeight: FontWeight.bold))),
           ],
         ),
       ),
+    );
+  }
+
+  InputDecoration _inputDecoration(String label, IconData icon) {
+    return InputDecoration(
+      hintText: label,
+      prefixIcon: Icon(icon),
+      filled: true,
+      fillColor: Colors.white.withOpacity(0.05),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+    );
+  }
+
+  ButtonStyle _btnStyle() {
+    return ElevatedButton.styleFrom(
+      minimumSize: const Size(double.infinity, 50),
+      backgroundColor: const Color(0xFF14B8A6),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     );
   }
 }
@@ -233,12 +275,6 @@ class _DashboardPageState extends State<DashboardPage> {
     ProfileView(),
   ];
 
-  void _onItemTapped(int index) {
-    setState(() {
-      _selectedIndex = index;
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -246,31 +282,17 @@ class _DashboardPageState extends State<DashboardPage> {
       bottomNavigationBar: BottomNavigationBar(
         backgroundColor: const Color(0xFF1E293B),
         items: const <BottomNavigationBarItem>[
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home_rounded),
-            label: 'Home',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.how_to_vote_rounded),
-            label: 'Community',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person_rounded),
-            label: 'Profile',
-          ),
+          BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: 'Home'),
+          BottomNavigationBarItem(icon: Icon(Icons.how_to_vote_rounded), label: 'Community'),
+          BottomNavigationBarItem(icon: Icon(Icons.person_rounded), label: 'Profile'),
         ],
         currentIndex: _selectedIndex,
         selectedItemColor: const Color(0xFF14B8A6),
         unselectedItemColor: Colors.white54,
-        onTap: _onItemTapped,
+        onTap: (i) => setState(() => _selectedIndex = i),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const ReportIssuePage()),
-          );
-        },
+        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const ReportIssuePage())),
         backgroundColor: const Color(0xFF14B8A6),
         child: const Icon(Icons.add_a_photo, color: Colors.white),
       ),
@@ -278,8 +300,44 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-class HomeView extends StatelessWidget {
+class HomeView extends StatefulWidget {
   const HomeView({super.key});
+
+  @override
+  State<HomeView> createState() => _HomeViewState();
+}
+
+class _HomeViewState extends State<HomeView> {
+  List<dynamic> _myComplaints = [];
+  String _userName = 'Citizen';
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchData();
+  }
+
+  Future<void> _fetchData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('access_token');
+      
+      final userRes = await http.get(Uri.parse('$baseUrl/users/me'), headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 10));
+      if (userRes.statusCode == 200) {
+        setState(() => _userName = json.decode(userRes.body)['name']);
+      }
+
+      final complaintRes = await http.get(Uri.parse('$baseUrl/complaints/me'), headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 10));
+      if (complaintRes.statusCode == 200) {
+        setState(() => _myComplaints = json.decode(complaintRes.body));
+      }
+    } catch (e) {
+      print('Error fetching home data: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -289,73 +347,43 @@ class HomeView extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text('Hello, Citizen', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                    Text('Sector 14, City', style: TextStyle(color: Color(0xFF14B8A6), fontWeight: FontWeight.w500)),
-                  ],
-                ),
-                const CircleAvatar(
-                  backgroundColor: Color(0xFF3B82F6),
-                  child: Icon(Icons.person, color: Colors.white),
-                )
-              ],
-            ),
+            Text('Hello, $_userName', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
             const SizedBox(height: 24),
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF14B8A6), Color(0xFF3B82F6)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+                gradient: const LinearGradient(colors: [Color(0xFF14B8A6), Color(0xFF3B82F6)]),
                 borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF14B8A6).withOpacity(0.3),
-                    blurRadius: 15,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
               ),
               child: Row(
                 children: [
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        Text('Your Reports', style: TextStyle(color: Colors.white70, fontSize: 14)),
-                        SizedBox(height: 8),
-                        Text('2 Active Issues', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                      children: [
+                        const Text('Your Reports', style: TextStyle(color: Colors.white70)),
+                        const SizedBox(height: 8),
+                        Text('${_myComplaints.length} Issues', style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
                       ],
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.assignment, color: Colors.white, size: 30),
-                  )
+                  const Icon(Icons.assignment, color: Colors.white, size: 30)
                 ],
               ),
             ),
             const SizedBox(height: 24),
-            const Text('Recent Reports', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Your Recent Reports', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             Expanded(
-              child: ListView(
-                children: [
-                  _buildReportCard('Pothole on Main St', 'Resolved', Colors.green),
-                  _buildReportCard('Streetlight broken', 'In Progress', Colors.orange),
-                ],
-              ),
+              child: _isLoading 
+                ? const Center(child: CircularProgressIndicator())
+                : ListView.builder(
+                    itemCount: _myComplaints.length,
+                    itemBuilder: (context, index) {
+                      final item = _myComplaints[index];
+                      return _buildReportCard(item['title'], item['status'], Colors.orange);
+                    },
+                  ),
             ),
           ],
         ),
@@ -364,46 +392,16 @@ class HomeView extends StatelessWidget {
   }
 
   Widget _buildReportCard(String title, String status, Color statusColor) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 50,
-            height: 50,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.image, color: Colors.white54),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                Text('Reported 2 days ago', style: const TextStyle(color: Colors.white54, fontSize: 12)),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: statusColor.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: statusColor.withOpacity(0.3)),
-            ),
-            child: Text(status, style: TextStyle(color: statusColor, fontSize: 12, fontWeight: FontWeight.bold)),
-          )
-        ],
+    return Card(
+      color: const Color(0xFF1E293B),
+      child: ListTile(
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: const Text('Status tracking enabled'),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(color: statusColor.withOpacity(0.1), borderRadius: BorderRadius.circular(20)),
+          child: Text(status, style: TextStyle(color: statusColor, fontSize: 12, fontWeight: FontWeight.bold)),
+        ),
       ),
     );
   }
@@ -411,131 +409,41 @@ class HomeView extends StatelessWidget {
 
 class CommunityView extends StatelessWidget {
   const CommunityView({super.key});
-
   @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-             const Text('Community Validation', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-             const SizedBox(height: 8),
-             const Text('Issues reported within 500m radius', style: TextStyle(color: Colors.white54)),
-             const SizedBox(height: 24),
-             Expanded(
-              child: ListView(
-                children: [
-                  _buildVoteCard(context, 'Garbage Dump', 'Waste Mgmt', '300m away', 88),
-                  _buildVoteCard(context, 'Water Leakage', 'Water Supply', '150m away', 92),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildVoteCard(BuildContext context, String title, String dept, String dist, int aiConfidence) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            height: 120,
-            color: Colors.white10,
-            child: const Center(child: Icon(Icons.broken_image, size: 50, color: Colors.white30)),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF14B8A6).withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text('AI: $aiConfidence%', style: const TextStyle(color: Color(0xFF14B8A6), fontSize: 12, fontWeight: FontWeight.bold)),
-                    )
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Icon(Icons.domain, size: 14, color: Colors.white54),
-                    const SizedBox(width: 4),
-                    Text(dept, style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                    const SizedBox(width: 16),
-                    const Icon(Icons.location_on, size: 14, color: Colors.white54),
-                    const SizedBox(width: 4),
-                    Text(dist, style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                const Text('Does this issue genuinely exist in your area?'),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.thumb_up),
-                        label: const Text('Yes'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green.withOpacity(0.2),
-                          foregroundColor: Colors.green,
-                        ),
-                        onPressed: () {
-                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Voted Yes!')));
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.thumb_down),
-                        label: const Text('No'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red.withOpacity(0.2),
-                          foregroundColor: Colors.red,
-                        ),
-                        onPressed: () {
-                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Voted No!')));
-                        },
-                      ),
-                    ),
-                  ],
-                )
-              ],
-            ),
-          )
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const Center(child: Text('Community Validation View'));
 }
 
 class ProfileView extends StatelessWidget {
   const ProfileView({super.key});
 
+  Future<void> _logout(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('access_token');
+    if (context.mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginPage()),
+        (route) => false,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: Text('Profile Settings (Mock)'),
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.person_pin, size: 100, color: Color(0xFF14B8A6)),
+          const SizedBox(height: 48),
+          ElevatedButton.icon(
+            onPressed: () => _logout(context),
+            icon: const Icon(Icons.logout),
+            label: const Text('Logout'),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+          )
+        ],
+      ),
     );
   }
 }
@@ -551,291 +459,101 @@ class _ReportIssuePageState extends State<ReportIssuePage> {
   File? _image;
   final picker = ImagePicker();
   bool _isAnalyzing = false;
-  bool _analysisComplete = false;
+  Map<String, dynamic>? _aiData;
 
   Future getImage() async {
     final pickedFile = await picker.pickImage(source: ImageSource.camera);
+    if (pickedFile == null) return;
 
     setState(() {
-      if (pickedFile != null) {
-        _image = File(pickedFile.path);
-        _isAnalyzing = true;
-        _analysisComplete = false;
-        
-        // Mock AI Delay
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) {
-            setState(() {
-              _isAnalyzing = false;
-              _analysisComplete = true;
-            });
-            _showAiSuggestion(context);
-          }
-        });
-      }
+      _image = File(pickedFile.path);
+      _isAnalyzing = true;
     });
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('access_token');
+
+      // 1. Upload File
+      var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/upload/'));
+      request.files.add(await http.MultipartFile.fromPath('file', _image!.path));
+      var uploadRes = await request.send();
+      var uploadData = json.decode(await uploadRes.stream.bytesToString());
+
+      // 2. Create Complaint (Back-end does AI analysis mock internally)
+      final complaintRes = await http.post(
+        Uri.parse('$baseUrl/complaints/'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({
+          'title': 'New Issue Spotted',
+          'description': 'Reported via mobile',
+          'image_url': uploadData['image_url'],
+          'latitude': 28.6139,
+          'longitude': 77.2090,
+        }),
+      );
+
+      if (complaintRes.statusCode == 200) {
+        setState(() {
+          _aiData = json.decode(complaintRes.body);
+          _isAnalyzing = false;
+        });
+        _showAiSuggestion();
+      }
+    } catch (e) {
+      print('Error in report flow: $e');
+      setState(() => _isAnalyzing = false);
+    }
   }
 
-  void _showAiSuggestion(BuildContext context) {
+  void _showAiSuggestion() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1E293B),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('AI Analysis Result', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            _row('Issue', _aiData?['issue_type']),
+            _row('Dept', _aiData?['department_suggested']),
+            _row('Severity', '${_aiData?['severity_score']}/10'),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () { Navigator.pop(context); Navigator.pop(context); },
+              style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
+              child: const Text('Confirm & Submit'),
+            )
+          ],
+        ),
       ),
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: const [
-                  Icon(Icons.auto_awesome, color: Color(0xFF14B8A6)),
-                  SizedBox(width: 8),
-                  Text('AI Analysis Complete', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF14B8A6).withOpacity(0.3)),
-                ),
-                child: Column(
-                  children: [
-                    _buildAiRow('Detected Issue', 'Pothole'),
-                    const SizedBox(height: 8),
-                    _buildAiRow('Department', 'Roads & Bridges'),
-                    const SizedBox(height: 8),
-                    _buildAiRow('Confidence', '94%'),
-                    const SizedBox(height: 8),
-                    _buildAiRow('Severity', 'High (8/10)'),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-              const Text('Do you want to proceed with this classification?', style: TextStyle(color: Colors.white70)),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.white24),
-                      ),
-                      child: const Text('Change'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF14B8A6)),
-                      child: const Text('Accept'),
-                    ),
-                  ),
-                ],
-              )
-            ],
-          ),
-        );
-      }
     );
   }
 
-  Widget _buildAiRow(String label, String value) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label, style: const TextStyle(color: Colors.white54)),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-      ],
-    );
-  }
+  Widget _row(String l, String? v) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(l), Text(v ?? '...', style: const TextStyle(fontWeight: FontWeight.bold))]),
+  );
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Report Issue'),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+      appBar: AppBar(title: const Text('Report Issue')),
+      body: Center(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            GestureDetector(
-              onTap: getImage,
-              child: Container(
-                height: 200,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: _image == null ? Colors.white24 : const Color(0xFF14B8A6),
-                    width: 2,
-                    style: BorderStyle.solid,
-                  ),
-                ),
-                child: _image == null
-                    ? Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
-                          Icon(Icons.camera_alt, size: 50, color: Colors.white54),
-                          SizedBox(height: 8),
-                          Text('Tap to take a photo', style: TextStyle(color: Colors.white54)),
-                          Text('Mandatory', style: TextStyle(color: Colors.redAccent, fontSize: 12)),
-                        ],
-                      )
-                    : Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(14),
-                            child: Image.file(_image!, fit: BoxFit.cover),
-                          ),
-                          if (_isAnalyzing)
-                            Container(
-                              decoration: BoxDecoration(
-                                color: Colors.black54,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: const [
-                                  CircularProgressIndicator(color: Color(0xFF14B8A6)),
-                                  SizedBox(height: 16),
-                                  Text('AI is analyzing image...'),
-                                ],
-                              ),
-                            ),
-                          if (_analysisComplete)
-                            Positioned(
-                              top: 8,
-                              right: 8,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF14B8A6),
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: const Row(
-                                  children: [
-                                    Icon(Icons.check_circle, size: 16, color: Colors.white),
-                                    SizedBox(width: 4),
-                                    Text('AI Analyzed', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                              ),
-                            )
-                        ],
-                      ),
-              ),
-            ),
+            if (_image != null) Image.file(_image!, height: 300),
+            if (_isAnalyzing) const CircularProgressIndicator(),
             const SizedBox(height: 24),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.gps_fixed, color: Color(0xFF14B8A6)),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        Text('Location Detected', style: TextStyle(fontWeight: FontWeight.bold)),
-                        Text('Lat: 28.6139, Lng: 77.2090', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                  const Icon(Icons.check_circle, color: Colors.green),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            TextFormField(
-              maxLines: 3,
-              decoration: InputDecoration(
-                hintText: 'Add description (Optional)',
-                filled: true,
-                fillColor: Colors.white.withOpacity(0.05),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-            ),
-            const SizedBox(height: 32),
-            ElevatedButton(
-              onPressed: _analysisComplete ? () {
-                 // Check for duplicates mock
-                _showDuplicateWarning(context);
-              } : null,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF14B8A6),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              child: const Text('Submit Report', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            ),
+            ElevatedButton.icon(onPressed: getImage, icon: const Icon(Icons.camera), label: const Text('Capture Issue')),
           ],
         ),
-      ),
-    );
-  }
-
-  void _showDuplicateWarning(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E293B),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: const [
-            Icon(Icons.warning_amber_rounded, color: Colors.yellow, size: 28),
-            SizedBox(width: 8),
-            Text('Similar Issue Found'),
-          ],
-        ),
-        content: const Text(
-          'A similar \"Pothole\" issue was already reported within 100m of this area 24 hours ago.\n\nDo you want to support that complaint instead?',
-          style: TextStyle(height: 1.5, color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context); // close dialog
-              Navigator.pop(context); // close report page
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report Submitted Anyway!')));
-            },
-            child: const Text('Submit New', style: TextStyle(color: Colors.white54)),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context); // close dialog
-              Navigator.pop(context); // close report page
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Supported existing complaint!')));
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF14B8A6)),
-            child: const Text('Support Existing'),
-          ),
-        ],
       ),
     );
   }
