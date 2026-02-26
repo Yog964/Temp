@@ -4,6 +4,7 @@ import { LayoutDashboard, Users, AlertTriangle, Settings, Map, LogOut, Activity 
 import Dashboard from './pages/Dashboard';
 import Complaints from './pages/Complaints';
 import FieldWorkers from './pages/FieldWorkers';
+import Heatmaps from './pages/Heatmaps';
 import './index.css';
 
 const Sidebar = () => {
@@ -100,6 +101,7 @@ function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/complaints" element={<Complaints />} />
               <Route path="/field-workers" element={<FieldWorkers />} />
+              <Route path="/heatmaps" element={<Heatmaps />} />
               <Route path="*" element={
                 <div className="flex flex-col items-center justify-center h-full">
                   <h2 className="title gradient-text">Coming Soon</h2>

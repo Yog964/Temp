@@ -1374,3 +1374,26 @@ input {
   transform: scale(1.05);
   box-shadow: 0 0 15px rgba(234, 179, 8, 0.4);
 }
+
+/* LEAFLET WHITE MODE STYLES */
+.leaflet-container {
+    background: #f8fafc !important;
+    border-radius: 12px;
+}
+
+.custom-pin {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.light-popup .leaflet-popup-content-wrapper {
+    background: #ffffff !important;
+    color: #1e293b !important;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.light-popup .leaflet-popup-tip {
+    background: #ffffff !important;
+}

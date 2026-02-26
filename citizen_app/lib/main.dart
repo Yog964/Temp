@@ -280,6 +280,7 @@ class _DashboardPageState extends State<DashboardPage> {
   static const List<Widget> _pages = <Widget>[
     HomeView(),
     CommunityView(),
+    HelpView(),
     ProfileView(),
   ];
 
@@ -289,20 +290,17 @@ class _DashboardPageState extends State<DashboardPage> {
       body: _pages.elementAt(_selectedIndex),
       bottomNavigationBar: BottomNavigationBar(
         backgroundColor: const Color(0xFF1E293B),
+        type: BottomNavigationBarType.fixed,
         items: const <BottomNavigationBarItem>[
           BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: 'Home'),
           BottomNavigationBarItem(icon: Icon(Icons.how_to_vote_rounded), label: 'Community'),
+          BottomNavigationBarItem(icon: Icon(Icons.chat_bubble_rounded), label: 'Help'),
           BottomNavigationBarItem(icon: Icon(Icons.person_rounded), label: 'Profile'),
         ],
         currentIndex: _selectedIndex,
         selectedItemColor: const Color(0xFF14B8A6),
         unselectedItemColor: Colors.white54,
         onTap: (i) => setState(() => _selectedIndex = i),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const ReportIssuePage())),
-        backgroundColor: const Color(0xFF14B8A6),
-        child: const Icon(Icons.add_a_photo, color: Colors.white),
       ),
     );
   }
@@ -405,6 +403,43 @@ class _HomeViewState extends State<HomeView> {
                 ],
               ),
             ),
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const ReportIssuePage())),
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF334155)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF0F172A),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.add_a_photo, color: Color(0xFF14B8A6)),
+                    ),
+                    const SizedBox(width: 16),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Report an Issue', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                          SizedBox(height: 4),
+                          Text('Take a photo and help the city', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward_ios, color: Colors.white54, size: 16),
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 24),
             const Text('Your Recent Reports', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
@@ -414,7 +449,7 @@ class _HomeViewState extends State<HomeView> {
                 child: _isLoading 
                   ? const Center(child: CircularProgressIndicator())
                   : _myComplaints.isEmpty 
-                    ? const Center(child: Text('No reports yet. Tap + to report an issue.'))
+                    ? const Center(child: Text('No reports yet. Click "Report an Issue" above.'))
                     : ListView.builder(
                         itemCount: _myComplaints.length,
                         itemBuilder: (context, index) {
@@ -863,6 +898,11 @@ class _ReportIssuePageState extends State<ReportIssuePage> {
       return;
     }
 
+    if (_currentPosition == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Waiting for GPS coordinates... Please wait a moment.')));
+      return;
+    }
+
     setState(() => _isSubmitting = true);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -1245,3 +1285,237 @@ class _ReportIssuePageState extends State<ReportIssuePage> {
   );
 }
 
+
+class HelpView extends StatefulWidget {
+  const HelpView({super.key});
+
+  @override
+  State<HelpView> createState() => _HelpViewState();
+}
+
+class _HelpViewState extends State<HelpView> {
+  final List<Map<String, String>> _messages = [
+    {'role': 'ai', 'content': 'Hello! I am your UrbanSathi AI assistant. How can I help you today? You can ask me about your complaint status or how to use the app.'}
+  ];
+  final _controller = TextEditingController();
+  bool _isTyping = false;
+  final String _geminiApiKey = 'AIzaSyBXX09gmHe4sBKXjM2ESGCbS6vkemQQZuI';
+  late ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToBottom() {
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _sendMessage() async {
+    if (_controller.text.trim().isEmpty) return;
+
+    final userMessage = _controller.text.trim();
+    setState(() {
+      _messages.add({'role': 'user', 'content': userMessage});
+      _isTyping = true;
+      _controller.clear();
+    });
+    
+    _scrollToBottom();
+
+    try {
+      // Get context about user's complaints
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('access_token');
+      String complaintContext = "";
+      
+      try {
+        final res = await http.get(Uri.parse('$baseUrl/complaints/me'), headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 5));
+        if (res.statusCode == 200) {
+          final List complaints = json.decode(res.body);
+          if (complaints.isNotEmpty) {
+            complaintContext = "\nUser's Current Complaints:\n" + complaints.map((c) => "- ID: ${c['id']}, Title: ${c['title']}, Status: ${c['status']}").join("\n");
+          } else {
+             complaintContext = "\nThe user has absolutely no reported complaints at the moment.";
+          }
+        }
+      } catch (_) {}
+
+      final requestBody = {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "You are UrbanSathi AI, a helpful assistant for a civic grievance reporting app (like identifying potholes, water leaks). Be polite, very concise, and directly address the user's issue.\n$complaintContext\n\nUser Question: $userMessage"
+              }
+            ]
+          }
+        ]
+      };
+
+      final response = await http.post(
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$_geminiApiKey'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(requestBody),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final aiText = data['candidates'][0]['content']['parts'][0]['text'];
+        setState(() {
+          _messages.add({'role': 'ai', 'content': aiText});
+        });
+      } else {
+        setState(() {
+          _messages.add({'role': 'ai', 'content': 'Sorry, I am having trouble connecting to my brain right now.'});
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _messages.add({'role': 'ai', 'content': 'Error: Could not reach AI services. Please check your internet connection.'});
+      });
+    } finally {
+      if (mounted) setState(() => _isTyping = false);
+      _scrollToBottom();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        AppBar(
+          title: const Text('AI Help & Support'),
+          elevation: 0,
+          backgroundColor: const Color(0xFF0F172A),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () {
+                setState(() => _messages.removeRange(1, _messages.length));
+              },
+              tooltip: 'Clear Chat',
+            )
+          ],
+        ),
+        Expanded(
+          child: Container(
+            color: const Color(0xFF0F172A),
+            child: ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.all(16),
+              itemCount: _messages.length + (_isTyping ? 1 : 0),
+              itemBuilder: (context, index) {
+                if (index == _messages.length) {
+                  return _buildTypingIndicator();
+                }
+                final msg = _messages[index];
+                return _buildChatBubble(msg['role'] == 'user', msg['content']!);
+              },
+            ),
+          ),
+        ),
+        _buildInputArea(),
+      ],
+    );
+  }
+
+  Widget _buildChatBubble(bool isUser, String text) {
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
+        decoration: BoxDecoration(
+          color: isUser ? const Color(0xFF14B8A6) : const Color(0xFF1E293B),
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(isUser ? 16 : 0),
+            bottomRight: Radius.circular(isUser ? 0 : 16),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            )
+          ]
+        ),
+        child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.4)),
+      ),
+    );
+  }
+
+  Widget _buildTypingIndicator() {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        margin: const EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(color: const Color(0xFF1E293B), borderRadius: BorderRadius.circular(16)),
+        child: const Text('AI is thinking...', style: TextStyle(color: Colors.white54, fontSize: 13, fontStyle: FontStyle.italic)),
+      ),
+    );
+  }
+
+  Widget _buildInputArea() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: const BoxDecoration(
+        color: Color(0xFF1E293B), 
+        border: Border(top: BorderSide(color: Color(0xFF334155)))
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _controller,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: 'Ask about your complaints...',
+                  hintStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: const Color(0xFF0F172A),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                ),
+                onSubmitted: (_) => _sendMessage(),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              decoration: const BoxDecoration(
+                color: Color(0xFF14B8A6),
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.send_rounded, color: Colors.white, size: 20), 
+                onPressed: _sendMessage
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+}
